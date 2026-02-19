@@ -1,0 +1,48 @@
+# KaliPi — fail2ban jail configuration
+# Aggressive banning for a headless Pi exposed over Tailscale + WiFi
+
+[DEFAULT]
+# Ban for 1 hour after 3 failures, look back 10 minutes
+bantime  = 3600
+findtime = 600
+maxretry = 3
+banaction = iptables-multiport
+backend = systemd
+ignoreip = 127.0.0.1/8 ::1 100.64.0.0/10
+
+# ─── SSH ───────────────────────────────────────────────────────
+[sshd]
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = /var/log/auth.log
+maxretry = 3
+bantime  = 7200
+
+# Aggressive: repeat offenders get 24h ban
+[sshd-aggressive]
+enabled  = true
+port     = ssh
+filter   = sshd[mode=aggressive]
+logpath  = /var/log/auth.log
+maxretry = 2
+bantime  = 86400
+findtime = 3600
+
+# ─── Tailscale SSH (monitor auth failures on tailscale0) ──────
+[tailscale-ssh]
+enabled  = true
+port     = ssh
+filter   = sshd
+logpath  = /var/log/auth.log
+maxretry = 5
+bantime  = 3600
+
+# ─── Recidive: ban repeat offenders for a week ────────────────
+[recidive]
+enabled  = true
+filter   = recidive
+logpath  = /var/log/fail2ban.log
+bantime  = 604800
+findtime = 86400
+maxretry = 3
