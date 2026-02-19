@@ -1,0 +1,45 @@
+# OS / System
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Credentials & secrets
+*.pem
+*.key
+*.crt
+*.env
+.env
+.env.*
+wpa_supplicant.conf
+tskey-*
+authkey*
+
+# Kali image files (too large for git)
+*.img
+*.img.xz
+*.img.gz
+*.iso
+*.zip
+
+# Build / temp
+*.o
+*.so
+*.pyc
+__pycache__/
+*.log
+error_output.txt
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# LCD driver build artifacts
+LCD-show-kali/
+
+# Backups
+*.bak
+*.orig
+*.backup
