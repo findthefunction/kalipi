@@ -1,6 +1,6 @@
 # KaliPi — Headless Kali Linux on Raspberry Pi 4
 
-Headless Kali Linux setup on a Raspberry Pi 4 (4GB/8GB) with a 128GB microSD card. Serves as auxiliary compute for a clawbot, accessible over Tailscale SSH from a DigitalOcean server. Includes a 3.5" SPI LCD for local system monitoring.
+Headless Kali Linux setup on a Raspberry Pi 4 (4GB/8GB) with a 128GB microSD card. Serves as auxiliary compute and a self-contained security node for a clawbot. Accessible over Tailscale SSH from a DigitalOcean server. Runs its own IDS, file integrity monitoring, and audit stack autonomously — no external SIEM dependency. Includes a 3.5" SPI LCD for real-time security/system monitoring.
 
 ---
 
@@ -16,9 +16,11 @@ Headless Kali Linux setup on a Raspberry Pi 4 (4GB/8GB) with a 128GB microSD car
 8. [Enable and Configure SSH](#enable-and-configure-ssh)
 9. [Install and Configure Tailscale](#install-and-configure-tailscale)
 10. [Connect from DigitalOcean Server](#connect-from-digitalocean-server)
-11. [LCD Screen Setup (3.5" SPI)](#lcd-screen-setup-35-spi)
-12. [Provisioning Scripts](#provisioning-scripts)
-13. [Troubleshooting](#troubleshooting)
+11. [Security Stack](#security-stack)
+12. [LCD Screen Setup (3.5" SPI)](#lcd-screen-setup-35-spi)
+13. [LCD Security Dashboard](#lcd-security-dashboard)
+14. [Provisioning Scripts](#provisioning-scripts)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -391,6 +393,139 @@ tailscale ping kalipi
 
 ---
 
+## Security Stack
+
+The Pi runs a self-contained security stack — no external SIEM or heavy services required. The DigitalOcean droplet stays free for running the clawbot instance, and the laptop can SSH in to review reports when available.
+
+### Why not full Kali Purple?
+
+Kali Purple bundles Elasticsearch, Malcolm, TheHive, etc. These need 8GB+ RAM and amd64 architecture. The Pi 4 can't run the full stack, and the DO droplet is already occupied. Instead, we run the ARM-native tools that give the same coverage at a fraction of the resource cost.
+
+### Install the security stack
+
+```bash
+sudo ./scripts/install-security.sh
+```
+
+### What gets installed
+
+| Tool | Purpose | RAM |
+|---|---|---|
+| **fail2ban** | Blocks brute-force attacks on SSH and services | ~15MB |
+| **auditd** | Kernel-level audit logging (file access, privilege escalation, module loading) | ~10MB |
+| **rkhunter** | Rootkit detection — runs daily via cron | on-demand |
+| **chkrootkit** | Secondary rootkit scanner | on-demand |
+| **Lynis** | Security auditing and hardening recommendations | on-demand |
+| **Suricata** | Network IDS — inspects traffic on wlan0 for attack signatures | ~200-400MB |
+| **arpwatch** | Detects new/rogue devices joining the local network | ~5MB |
+| **Wazuh Agent** | File integrity monitoring, log analysis, rootkit detection (local mode) | ~60MB |
+
+Total persistent RAM overhead: **~300-500MB** (fits comfortably on 4GB Pi)
+
+### What it monitors
+
+**Self-monitoring (the Pi watches itself):**
+- File integrity on `/etc`, `/boot`, `/usr/bin`, `/usr/sbin`, SSH keys, Tailscale state
+- Rootkit detection (rkhunter daily cron + Wazuh real-time)
+- Failed SSH attempts → auto-ban via fail2ban (3 strikes → 2hr ban, repeat → 24hr, recidive → 1 week)
+- Kernel audit log: privilege escalation, module loading, cron changes, network config changes
+- Suricata IDS on wlan0 with daily rule updates
+
+**Network monitoring (devices connected via WiFi/Tailscale):**
+- arpwatch detects new MAC addresses joining the local network
+- Suricata inspects all traffic flowing through the Pi's interface
+- Scheduled nmap scans of the local subnet (via `security-check.sh --devices`)
+- Diff-based alerting: new devices, new SUID binaries, new users, changed authorized_keys
+
+### Automated security checks
+
+A cron job runs `security-check.sh` every 6 hours:
+
+```bash
+# Manual run
+sudo ./scripts/security-check.sh
+
+# With network device scan
+sudo ./scripts/security-check.sh --devices
+
+# View the latest report
+cat /var/log/kalipi-security.log
+```
+
+The check outputs a JSON status file to `/tmp/kalipi/security-status.json` that the LCD dashboard reads.
+
+### fail2ban jails
+
+| Jail | Trigger | Ban time |
+|---|---|---|
+| `sshd` | 3 failed logins in 10min | 2 hours |
+| `sshd-aggressive` | 2 failures in 1hr | 24 hours |
+| `recidive` | 3 bans in 24hr | 1 week |
+
+Tailscale IPs (100.64.0.0/10) and localhost are whitelisted.
+
+### Audit rules (auditd)
+
+Monitors for changes to:
+- `/etc/ssh/`, `/home/kali/.ssh/` — SSH config & keys
+- `/etc/passwd`, `/etc/shadow`, `/etc/sudoers` — identity files
+- `/etc/crontab`, `/var/spool/cron/` — scheduled tasks
+- `/etc/systemd/`, `/lib/systemd/` — service definitions
+- `/boot/config.txt`, `/boot/cmdline.txt` — Pi boot config
+- `/var/lib/tailscale/` — Tailscale state
+- Kernel module loading (`insmod`, `rmmod`, `modprobe`)
+- Any process run as root by a non-root user (privilege escalation)
+
+Rules are locked (immutable) after load — requires reboot to modify.
+
+### Suricata IDS
+
+Tuned for Pi 4 resource constraints:
+
+```
+Stream memcap:      32MB
+Reassembly memcap:  64MB
+Flow memcap:        32MB
+Detection profile:  low
+```
+
+Logs to `/var/log/suricata/eve.json` (JSON) and `/var/log/suricata/fast.log` (text). Rules auto-update daily at 3am via `suricata-update`.
+
+### Log locations
+
+| Log | Path |
+|---|---|
+| Security check reports | `/var/log/kalipi-security.log` |
+| Security baselines | `/var/log/kalipi-reports/` |
+| fail2ban | `/var/log/fail2ban.log` |
+| Kernel audit | `/var/log/audit/audit.log` |
+| Suricata alerts (JSON) | `/var/log/suricata/eve.json` |
+| Suricata alerts (text) | `/var/log/suricata/fast.log` |
+| rkhunter (daily) | `/var/log/rkhunter-daily.log` |
+| Wazuh/OSSEC alerts | `/var/ossec/logs/alerts/alerts.log` |
+| LCD status (JSON) | `/tmp/kalipi/security-status.json` |
+
+### Review from laptop (when connected)
+
+```bash
+# SSH in via Tailscale
+ssh kali@kalipi
+
+# Quick status
+sudo ./scripts/security-check.sh
+
+# Review Suricata alerts
+sudo jq 'select(.event_type=="alert")' /var/log/suricata/eve.json | tail -50
+
+# Run a full Lynis audit
+sudo lynis audit system
+
+# Check audit log for privilege escalation
+sudo ausearch -k privilege_exec --interpret
+```
+
+---
+
 ## LCD Screen Setup (3.5" SPI)
 
 Uses the [LCD-show-kali](https://github.com/findthefunction/LCD-show-kali) driver package.
@@ -435,9 +570,55 @@ cd /home/kali/LCD-show-kali
 sudo ./rotate.sh 90   # 0, 90, 180, 270
 ```
 
-### Display system stats on the LCD (optional, for later)
+---
 
-A monitoring script can be added later to show CPU, RAM, network, and Tailscale status on the LCD. This will be configured after the base setup is confirmed working.
+## LCD Security Dashboard
+
+After the LCD driver is installed, deploy the security monitoring dashboard:
+
+### Install the dashboard service
+
+```bash
+# Copy scripts and service to system paths
+sudo cp scripts/monitor-lcd.sh /opt/kalipi/scripts/
+sudo cp scripts/security-check.sh /opt/kalipi/scripts/
+sudo chmod +x /opt/kalipi/scripts/*.sh
+
+# Install the systemd service
+sudo cp config/kalipi-monitor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable kalipi-monitor
+sudo systemctl start kalipi-monitor
+```
+
+### What the LCD shows
+
+```
+ ╔═══════════════════════════════════╗
+ ║         K A L I P i               ║
+ ║     Security Monitor  14:32:07   ║
+ ╠═══════════════════════════════════╣
+ ║ SYSTEM                           ║
+ ║  CPU: 12%  Temp: 52°C            ║
+ ║  RAM: 487/3904MB (12%)           ║
+ ║  DSK: 8.2G/118G (7%)            ║
+ ║  Up:  2 days, 14 hours           ║
+ ╠═══════════════════════════════════╣
+ ║ NETWORK                          ║
+ ║  WiFi: 192.168.0.105             ║
+ ║  T.S.: 100.64.0.12 (Running)    ║
+ ╠═══════════════════════════════════╣
+ ║ SERVICES                         ║
+ ║  ssh:active ts:active f2b:active ║
+ ╠═══════════════════════════════════╣
+ ║ SECURITY                         ║
+ ║  Alerts: 0  Banned: 2            ║
+ ║  Failed SSH: 7 (6hr)             ║
+ ║  Last check: 2026-02-19_14:00    ║
+ ╚═══════════════════════════════════╝
+```
+
+Refreshes every 10 seconds. Reads security data from the last `security-check.sh` run and live system stats.
 
 ---
 
@@ -445,27 +626,63 @@ A monitoring script can be added later to show CPU, RAM, network, and Tailscale 
 
 This repo includes helper scripts to automate the post-boot setup:
 
-### `scripts/setup.sh` — Full provisioning script
-
-Run after first SSH login to automate the entire setup:
+### `scripts/setup.sh` — Full provisioning (system, WiFi, SSH, Tailscale)
 
 ```bash
 git clone https://github.com/findthefunction/kalipi.git /home/kali/kalipi
 cd /home/kali/kalipi
 chmod +x scripts/*.sh
-sudo ./scripts/setup.sh
+sudo ./scripts/setup.sh [TAILSCALE_AUTHKEY]
 ```
 
-### `scripts/install-tailscale.sh` — Tailscale-only setup
+### `scripts/install-security.sh` — Security stack
 
 ```bash
-sudo ./scripts/install-tailscale.sh
+sudo ./scripts/install-security.sh
 ```
 
-### `scripts/install-lcd.sh` — LCD driver setup
+### `scripts/install-tailscale.sh` — Tailscale only
 
 ```bash
-sudo ./scripts/install-lcd.sh
+sudo ./scripts/install-tailscale.sh [AUTHKEY]
+```
+
+### `scripts/install-lcd.sh` — LCD driver (reboots)
+
+```bash
+sudo ./scripts/install-lcd.sh [rotation]  # 0, 90, 180, 270
+```
+
+### `scripts/security-check.sh` — On-demand security audit
+
+```bash
+sudo ./scripts/security-check.sh              # Self-check
+sudo ./scripts/security-check.sh --devices     # + network device scan
+sudo ./scripts/security-check.sh --cron        # No color (for cron)
+```
+
+### `scripts/monitor-lcd.sh` — LCD dashboard
+
+```bash
+sudo ./scripts/monitor-lcd.sh          # One-shot render
+sudo ./scripts/monitor-lcd.sh --loop   # Continuous (for systemd)
+```
+
+### Full provisioning order
+
+```bash
+# 1. Base system
+sudo ./scripts/setup.sh tskey-auth-XXXX
+
+# 2. Security stack
+sudo ./scripts/install-security.sh
+
+# 3. LCD driver (will reboot)
+sudo ./scripts/install-lcd.sh 90
+
+# 4. After reboot — start LCD dashboard
+sudo systemctl enable kalipi-monitor
+sudo systemctl start kalipi-monitor
 ```
 
 ---
@@ -552,21 +769,33 @@ sudo resize2fs /dev/mmcblk0p2
 ## Network Architecture
 
 ```
-┌─────────────────┐     Tailscale Mesh VPN      ┌──────────────────┐
-│  DigitalOcean   │◄──────────────────────────►  │   Raspberry Pi 4 │
-│  Server         │       (WireGuard)            │   (KaliPi)       │
-│                 │                              │                  │
-│  Tailscale IP:  │                              │  Tailscale IP:   │
-│  100.x.x.x     │                              │  100.x.x.x      │
-└─────────────────┘                              └────────┬─────────┘
-                                                          │
-                                                     WiFi │ TP-Link_A7FC
-                                                          │
-                                                 ┌────────┴─────────┐
-                                                 │   ClawBot        │
-                                                 │   (local net /   │
-                                                 │    Tailscale)    │
-                                                 └──────────────────┘
+ ┌──────────────────────┐
+ │  Laptop (optional)   │
+ │  SSH in to review    │
+ │  reports & Lynis     │
+ └──────────┬───────────┘
+            │ Tailscale (when connected)
+            │
+ ┌──────────┴───────────┐     Tailscale Mesh VPN     ┌──────────────────────────┐
+ │  DigitalOcean        │◄──────────────────────────► │  Raspberry Pi 4 (KaliPi) │
+ │  Droplet             │       (WireGuard)           │                          │
+ │                      │                             │  SECURITY STACK:         │
+ │  - ClawBot instance  │                             │  - Suricata (IDS)        │
+ │  - Tailscale node    │                             │  - fail2ban              │
+ │                      │                             │  - auditd                │
+ │  (small — no room    │                             │  - Wazuh agent (local)   │
+ │   for SIEM)          │                             │  - rkhunter / Lynis      │
+ │                      │                             │  - arpwatch              │
+ └──────────────────────┘                             │  - LCD security dash     │
+                                                      └────────────┬─────────────┘
+                                                                   │
+                                                              WiFi │ TP-Link_A7FC
+                                                                   │
+                                                      ┌────────────┴─────────────┐
+                                                      │  ClawBot + other devices │
+                                                      │  (monitored via network  │
+                                                      │   scans + Suricata IDS)  │
+                                                      └──────────────────────────┘
 ```
 
 ---

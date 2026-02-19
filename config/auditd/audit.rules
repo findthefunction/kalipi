@@ -1,0 +1,69 @@
+# KaliPi — auditd rules
+# Focused on detecting intrusion/tampering on a headless Pi
+
+# Remove any existing rules
+-D
+
+# Buffer size (increase if audit backlog warnings appear)
+-b 1024
+
+# ─── Authentication & access ──────────────────────────────────
+# Failed file access attempts
+-a always,exit -F arch=b64 -S open,openat -F exit=-EACCES -k access_denied
+-a always,exit -F arch=b64 -S open,openat -F exit=-EPERM -k access_denied
+
+# Login/logout events
+-w /var/log/lastlog -p wa -k logins
+-w /var/log/faillog -p wa -k logins
+-w /var/run/utmp -p wa -k session
+-w /var/log/wtmp -p wa -k session
+
+# ─── File integrity (critical paths) ─────────────────────────
+# SSH config & keys
+-w /etc/ssh/ -p wa -k ssh_config
+-w /home/kali/.ssh/ -p wa -k ssh_keys
+
+# System authentication
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/sudoers -p wa -k identity
+-w /etc/sudoers.d/ -p wa -k identity
+
+# PAM config
+-w /etc/pam.d/ -p wa -k pam
+
+# Cron
+-w /etc/crontab -p wa -k cron
+-w /etc/cron.d/ -p wa -k cron
+-w /var/spool/cron/ -p wa -k cron
+
+# Systemd services
+-w /etc/systemd/ -p wa -k systemd
+-w /lib/systemd/ -p wa -k systemd
+
+# ─── Network ─────────────────────────────────────────────────
+# Network config changes
+-w /etc/hosts -p wa -k network
+-w /etc/network/ -p wa -k network
+-w /etc/wpa_supplicant/ -p wa -k network
+-w /etc/resolv.conf -p wa -k network
+
+# ─── Tailscale ───────────────────────────────────────────────
+-w /var/lib/tailscale/ -p wa -k tailscale
+-w /etc/default/tailscaled -p wa -k tailscale
+
+# ─── Boot ────────────────────────────────────────────────────
+-w /boot/config.txt -p wa -k boot
+-w /boot/cmdline.txt -p wa -k boot
+
+# ─── Privilege escalation ────────────────────────────────────
+-a always,exit -F arch=b64 -S execve -F euid=0 -F auid>=1000 -F auid!=4294967295 -k privilege_exec
+
+# ─── Kernel modules ──────────────────────────────────────────
+-w /sbin/insmod -p x -k modules
+-w /sbin/rmmod -p x -k modules
+-w /sbin/modprobe -p x -k modules
+
+# Make config immutable (requires reboot to change)
+-e 2
