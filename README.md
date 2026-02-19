@@ -43,7 +43,7 @@ Download the **64-bit** image (for 4GB/8GB Pi 4):
 
 ```bash
 # From your workstation
-wget https://kali.download/arm-images/kali-2025.1c/kali-linux-2025.1c-raspberry-pi-arm64.img.xz
+wget https://kali.download/arm-images/kali-2025.4/kali-linux-2025.4-raspberry-pi-arm64.img.xz
 ```
 
 Or visit: https://www.kali.org/get-kali/#kali-arm
@@ -52,7 +52,7 @@ Or visit: https://www.kali.org/get-kali/#kali-arm
 
 Verify the download:
 ```bash
-sha256sum kali-linux-2025.1c-raspberry-pi-arm64.img.xz
+sha256sum kali-linux-2025.4-raspberry-pi-arm64.img.xz
 # Compare with the SHA256 checksum on the download page
 ```
 
@@ -70,7 +70,7 @@ lsblk
 sudo umount /dev/sdX*
 
 # Flash (replace /dev/sdX with your SD card device)
-xzcat kali-linux-2025.1c-raspberry-pi-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+xzcat kali-linux-2025.4-raspberry-pi-arm64.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
 sudo sync
 ```
 
