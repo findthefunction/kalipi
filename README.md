@@ -92,22 +92,42 @@ sudo sync
 
 ## Pre-Boot Configuration (Headless)
 
-After flashing, mount the SD card boot partition on your workstation to configure headless access.
+**This is the most important step.** Without WiFi on first boot, you have no way into a headless Pi.
 
-### Enable SSH
+### Option A: Automated provisioning script (recommended)
+
+The `provision-sd.sh` script writes WiFi and SSH config to the SD card in **5 redundant ways** to guarantee connectivity on first boot, regardless of which Kali ARM image version you flashed:
 
 ```bash
-# Mount the boot partition (it will show up as "boot" or the first partition)
-# Create an empty ssh file to enable SSH on first boot
-sudo touch /media/$USER/boot/ssh
+# On your workstation, after flashing the image
+git clone https://github.com/findthefunction/kalipi.git
+cd kalipi
+sudo ./scripts/provision-sd.sh /dev/sdX    # replace with your SD card device
 ```
 
-### Configure WiFi (wpa_supplicant)
+What it configures:
+1. `/boot/wpa_supplicant.conf` — boot-partition copy mechanism
+2. `/etc/wpa_supplicant/wpa_supplicant.conf` — direct wpa_supplicant config
+3. `/etc/NetworkManager/system-connections/` — NM connection profile (newer Kali images use NM)
+4. `/etc/network/interfaces.d/wlan0` — ifupdown auto-connect
+5. `kalipi-firstboot.service` — one-shot systemd service that runs on first boot as a safety net: if WiFi still isn't up, it tries NM, then wpa_supplicant, then raw DHCP
 
-Create the WiFi configuration file:
+It also enables SSH and sets the hostname to `kalipi`.
+
+### Option B: Manual configuration
+
+If you prefer to configure the SD card manually:
 
 ```bash
-sudo tee /media/$USER/boot/wpa_supplicant.conf << 'EOF'
+# Mount both partitions after flashing
+sudo mount /dev/sdX1 /mnt/boot
+sudo mount /dev/sdX2 /mnt/rootfs
+
+# 1. Enable SSH
+sudo touch /mnt/boot/ssh
+
+# 2. WiFi on boot partition
+sudo tee /mnt/boot/wpa_supplicant.conf << 'EOF'
 country=US
 ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
 update_config=1
@@ -116,21 +136,61 @@ network={
     ssid="TP-Link_A7FC"
     psk="11511762"
     key_mgmt=WPA-PSK
+    priority=1
 }
 EOF
-```
 
-> This file is automatically moved to `/etc/wpa_supplicant/` on first boot.
+# 3. WiFi directly in rootfs (critical — boot copy doesn't always work)
+sudo cp /mnt/boot/wpa_supplicant.conf /mnt/rootfs/etc/wpa_supplicant/wpa_supplicant.conf
 
-### Unmount and eject
+# 4. Auto-connect via ifupdown
+sudo tee /mnt/rootfs/etc/network/interfaces.d/wlan0 << 'EOF'
+auto wlan0
+allow-hotplug wlan0
+iface wlan0 inet dhcp
+    wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+EOF
 
-```bash
+# 5. NetworkManager profile (for newer Kali images that use NM)
+sudo mkdir -p /mnt/rootfs/etc/NetworkManager/system-connections
+sudo tee /mnt/rootfs/etc/NetworkManager/system-connections/TP-Link_A7FC.nmconnection << 'EOF'
+[connection]
+id=TP-Link_A7FC
+type=wifi
+autoconnect=true
+autoconnect-priority=100
+
+[wifi]
+ssid=TP-Link_A7FC
+mode=infrastructure
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=11511762
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+EOF
+sudo chmod 600 /mnt/rootfs/etc/NetworkManager/system-connections/TP-Link_A7FC.nmconnection
+
+# 6. Enable SSH in systemd
+sudo ln -sf /lib/systemd/system/ssh.service \
+    /mnt/rootfs/etc/systemd/system/multi-user.target.wants/ssh.service
+
+# 7. Unmount
 sudo sync
-sudo umount /media/$USER/boot
-sudo umount /media/$USER/rootfs  # if mounted
+sudo umount /mnt/boot
+sudo umount /mnt/rootfs
 ```
 
-Insert the microSD into the Raspberry Pi 4 and power on.
+> **Why so many methods?** Different Kali ARM image versions use different networking stacks. Older images use `wpa_supplicant` + `ifupdown`. Newer images use `NetworkManager`. The boot-partition `wpa_supplicant.conf` copy mechanism is a Raspberry Pi OS feature that Kali *sometimes* supports. By writing all of them, at least one will work.
+
+### Insert and power on
+
+Insert the microSD into the Raspberry Pi 4 and power on. Wait ~60 seconds for first boot.
 
 ---
 
@@ -624,9 +684,25 @@ Refreshes every 10 seconds. Reads security data from the last `security-check.sh
 
 ## Provisioning Scripts
 
-This repo includes helper scripts to automate the post-boot setup:
+This repo includes helper scripts to automate the full setup:
 
-### `scripts/setup.sh` — Full provisioning (system, WiFi, SSH, Tailscale)
+### `scripts/provision-sd.sh` — SD card prep (run on your workstation)
+
+```bash
+# After flashing the Kali image to SD card
+sudo ./scripts/provision-sd.sh /dev/sdX
+```
+
+Writes WiFi, SSH, hostname, and first-boot service to the SD card.
+Covers wpa_supplicant, NetworkManager, ifupdown, and a systemd safety net.
+
+### `scripts/firstboot.sh` — First-boot safety net (runs automatically)
+
+Installed by `provision-sd.sh`. Runs once on first power-on via systemd.
+If WiFi isn't up, it tries every method (NM, wpa_supplicant, raw DHCP).
+Disables itself after running. Log: `/var/log/kalipi-firstboot.log`
+
+### `scripts/setup.sh` — Post-boot provisioning (run on the Pi via SSH)
 
 ```bash
 git clone https://github.com/findthefunction/kalipi.git /home/kali/kalipi
@@ -634,6 +710,8 @@ cd /home/kali/kalipi
 chmod +x scripts/*.sh
 sudo ./scripts/setup.sh [TAILSCALE_AUTHKEY]
 ```
+
+Updates system, installs essentials, hardens SSH, installs Tailscale, expands filesystem.
 
 ### `scripts/install-security.sh` — Security stack
 
@@ -671,16 +749,29 @@ sudo ./scripts/monitor-lcd.sh --loop   # Continuous (for systemd)
 ### Full provisioning order
 
 ```bash
-# 1. Base system
+# ── On your workstation (before inserting SD card) ──
+# 0. Flash Kali ARM image to SD card (see "Flash the SD Card" section)
+# 1. Provision WiFi + SSH onto SD card
+sudo ./scripts/provision-sd.sh /dev/sdX
+
+# ── Insert SD card, power on Pi, wait 60s, SSH in ──
+ssh kali@kalipi    # or ssh kali@<IP from router/nmap>
+# default password: kali (change it!)
+
+# ── On the Pi ──
+# 2. Clone this repo and run base setup
+git clone https://github.com/findthefunction/kalipi.git /home/kali/kalipi
+cd /home/kali/kalipi
+chmod +x scripts/*.sh
 sudo ./scripts/setup.sh tskey-auth-XXXX
 
-# 2. Security stack
+# 3. Security stack
 sudo ./scripts/install-security.sh
 
-# 3. LCD driver (will reboot)
+# 4. LCD driver (will reboot)
 sudo ./scripts/install-lcd.sh 90
 
-# 4. After reboot — start LCD dashboard
+# 5. After reboot — start LCD dashboard
 sudo systemctl enable kalipi-monitor
 sudo systemctl start kalipi-monitor
 ```
