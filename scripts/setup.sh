@@ -166,8 +166,18 @@ fi
 
 # ─── SSH ──────────────────────────────────────────────────────
 log "Configuring SSH..."
-systemctl enable ssh
-systemctl start ssh
+
+# Generate host keys if missing
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+    log "Generating SSH host keys..."
+    ssh-keygen -A
+fi
+
+# Enable both names (Kali uses ssh.service or sshd.service)
+for SVC in ssh sshd; do
+    systemctl enable "$SVC" 2>/dev/null || true
+    systemctl start "$SVC" 2>/dev/null || true
+done
 
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/hardened.conf << EOF
@@ -178,7 +188,8 @@ ClientAliveInterval 120
 ClientAliveCountMax 3
 EOF
 
-systemctl restart ssh
+# Restart whichever is running
+systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
 
 # ─── Tailscale ────────────────────────────────────────────────
 log "Installing Tailscale..."
