@@ -71,6 +71,20 @@ cp "${REPO_DIR}/scripts/security-check.sh" "${INSTALL_DIR}/scripts/"
 cp "${REPO_DIR}/scripts/monitor-lcd.sh" "${INSTALL_DIR}/scripts/"
 chmod +x "${INSTALL_DIR}/scripts/"*.sh
 
+# ─── Deploy X11 config for SPI LCD + touch ───────────────────
+# Only install if LCD35-show hasn't already set up xorg.conf.d.
+# LCD35-show creates its own calibration and evdev configs — don't overwrite.
+if [ ! -f /etc/X11/xorg.conf.d/99-calibration.conf ] && \
+   [ ! -f /etc/X11/xorg.conf.d/45-evdev.conf ]; then
+    log "No LCD35-show xorg config found, installing fallback..."
+    mkdir -p /etc/X11/xorg.conf.d
+    cp "${REPO_DIR}/config/xorg/99-kalipi-lcd.conf" /etc/X11/xorg.conf.d/
+    cp "${REPO_DIR}/config/xorg/99-kalipi-touch.conf" /etc/X11/xorg.conf.d/
+    log "Fallback X11 LCD and touch configs installed."
+else
+    log "LCD35-show xorg config found, skipping (not overwriting)."
+fi
+
 # ─── Create X11 startup wrapper ─────────────────────────────
 log "Creating dashboard startup wrapper..."
 cat > "${INSTALL_DIR}/start-dashboard.sh" << 'WRAPPER'
@@ -126,10 +140,16 @@ cat > "${INSTALL_DIR}/.xinitrc" << 'XINITRC'
 # KaliPi — Minimal X session for the dashboard
 # No window manager, no desktop — just the pygame dashboard.
 
+LOG="/var/log/kalipi-dashboard.log"
+
 # Disable screen blanking and power management
 xset s off
 xset -dpms
 xset s noblank
+
+# Log actual X resolution for debugging
+xdpyinfo | grep dimensions >> "$LOG" 2>&1 || true
+xinput list >> "$LOG" 2>&1 || true
 
 # Launch the dashboard
 cd /opt/kalipi
@@ -152,8 +172,10 @@ LOG_FILE="/var/log/kalipi-dashboard.log"
 # Determine framebuffer
 if [ -c "$FB_DEVICE" ]; then
     export FRAMEBUFFER="$FB_DEVICE"
+    export SDL_FBDEV="$FB_DEVICE"
 else
     export FRAMEBUFFER="/dev/fb0"
+    export SDL_FBDEV="/dev/fb0"
     echo "$(date): WARNING - fb1 not found, falling back to fb0" >> "$LOG_FILE"
 fi
 
