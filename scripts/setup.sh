@@ -111,7 +111,7 @@ apt install -y \
     net-tools \
     wireless-tools \
     wpasupplicant \
-    raspi-config \
+    parted \
     python3 \
     python3-pip \
     jq \
@@ -222,11 +222,13 @@ log "Checking filesystem size..."
 ROOT_SIZE=$(df -BG / | tail -1 | awk '{print $2}' | tr -d 'G')
 if [ "$ROOT_SIZE" -lt 100 ]; then
     warn "Root partition is ${ROOT_SIZE}GB — expanding to fill 128GB card..."
-    raspi-config --expand-rootfs || {
-        warn "raspi-config failed, trying manual expansion..."
-        parted /dev/mmcblk0 resizepart 2 100% || true
-        resize2fs /dev/mmcblk0p2 || true
-    }
+    # Kali ARM doesn't ship raspi-config — expand directly with parted/resize2fs
+    ROOT_DISK=$(lsblk -ndo pkname "$(findmnt -n -o SOURCE /)" 2>/dev/null || echo "mmcblk0")
+    ROOT_PART=$(findmnt -n -o SOURCE / 2>/dev/null || echo "/dev/mmcblk0p2")
+    PART_NUM=$(echo "$ROOT_PART" | grep -o '[0-9]*$')
+    log "Expanding partition ${PART_NUM} on /dev/${ROOT_DISK}..."
+    parted -s "/dev/${ROOT_DISK}" resizepart "${PART_NUM}" 100% || true
+    resize2fs "${ROOT_PART}" || true
 fi
 
 # ─── Clean up first-boot service if it ran ────────────────────
