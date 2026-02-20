@@ -193,10 +193,19 @@ done
 mkdir -p /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/hardened.conf << EOF
 PermitRootLogin no
-PasswordAuthentication yes
+PasswordAuthentication no
+PubkeyAuthentication yes
 MaxAuthTries 5
 ClientAliveInterval 120
 ClientAliveCountMax 3
+LoginGraceTime 30
+EOF
+
+# Allow password auth from local network only (recovery fallback)
+cat > /etc/ssh/sshd_config.d/local-password.conf << EOF
+# Allow password auth from LAN for emergency recovery
+Match Address 192.168.0.0/24
+    PasswordAuthentication yes
 EOF
 
 # Restart whichever is running

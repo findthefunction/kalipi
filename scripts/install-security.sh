@@ -171,14 +171,17 @@ fi
 log "Setting up SSH device scanner..."
 mkdir -p /opt/kalipi/scripts
 cp "${SCRIPT_DIR}/security-check.sh" /opt/kalipi/scripts/ 2>/dev/null || true
+cp "${SCRIPT_DIR}/tailscale-watchdog.sh" /opt/kalipi/scripts/ 2>/dev/null || true
 chmod +x /opt/kalipi/scripts/*.sh 2>/dev/null || true
 
-# Cron: run security check every 6 hours
+# Cron: run security check every 6 hours + Tailscale watchdog every 5 min
 cat > /etc/cron.d/kalipi-security << 'CRON'
 # KaliPi security checks — every 6 hours
 0 */6 * * * root /opt/kalipi/scripts/security-check.sh --cron >> /var/log/kalipi-security.log 2>&1
 # Suricata rule update — daily at 3am
 0 3 * * * root /usr/bin/suricata-update && systemctl restart suricata
+# Tailscale watchdog — every 5 minutes, restart if tunnel is down
+*/5 * * * * root /opt/kalipi/scripts/tailscale-watchdog.sh
 CRON
 log "Cron jobs configured (6hr security check, daily rule update)."
 
