@@ -72,11 +72,18 @@ cp "${REPO_DIR}/scripts/monitor-lcd.sh" "${INSTALL_DIR}/scripts/"
 chmod +x "${INSTALL_DIR}/scripts/"*.sh
 
 # ─── Deploy X11 config for SPI LCD + touch ───────────────────
-log "Installing X11 configuration for SPI LCD..."
-mkdir -p /etc/X11/xorg.conf.d
-cp "${REPO_DIR}/config/xorg/99-kalipi-lcd.conf" /etc/X11/xorg.conf.d/
-cp "${REPO_DIR}/config/xorg/99-kalipi-touch.conf" /etc/X11/xorg.conf.d/
-log "X11 LCD and touch configs installed."
+# Only install if LCD35-show hasn't already set up xorg.conf.d.
+# LCD35-show creates its own calibration and evdev configs — don't overwrite.
+if [ ! -f /etc/X11/xorg.conf.d/99-calibration.conf ] && \
+   [ ! -f /etc/X11/xorg.conf.d/45-evdev.conf ]; then
+    log "No LCD35-show xorg config found, installing fallback..."
+    mkdir -p /etc/X11/xorg.conf.d
+    cp "${REPO_DIR}/config/xorg/99-kalipi-lcd.conf" /etc/X11/xorg.conf.d/
+    cp "${REPO_DIR}/config/xorg/99-kalipi-touch.conf" /etc/X11/xorg.conf.d/
+    log "Fallback X11 LCD and touch configs installed."
+else
+    log "LCD35-show xorg config found, skipping (not overwriting)."
+fi
 
 # ─── Create X11 startup wrapper ─────────────────────────────
 log "Creating dashboard startup wrapper..."
