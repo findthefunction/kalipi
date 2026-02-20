@@ -3,11 +3,15 @@
 # Uses: https://github.com/findthefunction/LCD-show-kali
 # WARNING: This script will reboot the system after installation.
 # Usage: sudo ./scripts/install-lcd.sh [rotation]
-#   rotation: 0, 90 (default), 180, 270
+#   rotation: 0 (default — X11 handles orientation), 90, 180, 270
+#
+# NOTE: The default is 0 (no LCD controller rotation). The X11 fbdev
+# driver's "Rotate CW" option in 99-kalipi-lcd.conf handles landscape
+# orientation. Using rotate=0 here avoids double-rotation issues.
 
 set -euo pipefail
 
-ROTATION="${1:-90}"
+ROTATION="${1:-0}"
 LCD_REPO="https://github.com/findthefunction/LCD-show-kali.git"
 LCD_DIR="/home/kali/LCD-show-kali"
 
