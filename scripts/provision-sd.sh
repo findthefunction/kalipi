@@ -46,9 +46,24 @@ fi
 DEVICE="$1"
 
 # Safety check — don't nuke the system drive
-if echo "$DEVICE" | grep -qE "^/dev/(sda|nvme0n1)$"; then
-    err "Refusing to operate on $DEVICE — this looks like your system drive."
+# Detect the actual root device and refuse to operate on it
+ROOT_DEVICE=$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -1)
+if [ -n "$ROOT_DEVICE" ] && [ "/dev/${ROOT_DEVICE}" = "$DEVICE" ]; then
+    err "Refusing to operate on $DEVICE — this is your root filesystem device."
     exit 1
+fi
+
+# Also check if the device has any mounted partitions (other than what we'll mount)
+MOUNTED_PARTS=$(lsblk -no MOUNTPOINT "$DEVICE" 2>/dev/null | grep -v "^$" || true)
+if [ -n "$MOUNTED_PARTS" ]; then
+    warn "Device $DEVICE has mounted partitions:"
+    echo "$MOUNTED_PARTS"
+    warn "Unmount them first or verify this is the correct device."
+    read -rp "Continue anyway? (y/N): " CONFIRM
+    if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
+        err "Aborted."
+        exit 1
+    fi
 fi
 
 if [ ! -b "$DEVICE" ]; then
