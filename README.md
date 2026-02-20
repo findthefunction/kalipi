@@ -1,6 +1,8 @@
-# KaliPi — Headless Kali Linux on Raspberry Pi 4
+# KaliPi — Kali Linux Security & Monitoring Station on Raspberry Pi 4
 
-Headless Kali Linux setup on a Raspberry Pi 4 (4GB/8GB) with a 128GB microSD card. Serves as auxiliary compute and a self-contained security node for a clawbot. Accessible over Tailscale SSH from a DigitalOcean server. Runs its own IDS, file integrity monitoring, and audit stack autonomously — no external SIEM dependency. Includes a 3.5" SPI LCD for real-time security/system monitoring.
+Kali Linux on a Raspberry Pi 4 (8GB) with a 128GB microSD card and 3.5" SPI touchscreen. Serves as auxiliary compute and a self-contained security monitoring station for a clawbot. Accessible over Tailscale SSH from a DigitalOcean server. Runs its own IDS, file integrity monitoring, and audit stack autonomously — no external SIEM dependency.
+
+The touchscreen displays an interactive dashboard with multiple views: security monitoring, IDS alerts, network status, trading/price feed data, and a touch-friendly app launcher. Primary interaction is via SSH for servicing; the LCD provides at-a-glance status and touch navigation between views.
 
 ---
 
@@ -18,9 +20,11 @@ Headless Kali Linux setup on a Raspberry Pi 4 (4GB/8GB) with a 128GB microSD car
 10. [Connect from DigitalOcean Server](#connect-from-digitalocean-server)
 11. [Security Stack](#security-stack)
 12. [LCD Screen Setup (3.5" SPI)](#lcd-screen-setup-35-spi)
-13. [LCD Security Dashboard](#lcd-security-dashboard)
-14. [Provisioning Scripts](#provisioning-scripts)
-15. [Troubleshooting](#troubleshooting)
+13. [Touchscreen Dashboard](#touchscreen-dashboard)
+14. [Strip Desktop Bloat](#strip-desktop-bloat)
+15. [Trading & App Integration](#trading--app-integration)
+16. [Provisioning Scripts](#provisioning-scripts)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -632,53 +636,162 @@ sudo ./rotate.sh 90   # 0, 90, 180, 270
 
 ---
 
-## LCD Security Dashboard
+## Touchscreen Dashboard
 
-After the LCD driver is installed, deploy the security monitoring dashboard:
+Interactive, touch-navigable dashboard for the 3.5" SPI LCD (480x320). Built with pygame running on a minimal X11 session — no desktop environment needed.
 
-### Install the dashboard service
+### Display Architecture
+
+```
+┌─────────────────────────────────────────────┐
+│ Hardware: 3.5" SPI TFT LCD (480x320)        │
+│   └─ Device tree: tft35a overlay            │
+│   └─ Framebuffer: /dev/fb1                  │
+├─────────────────────────────────────────────┤
+│ Display Server: Minimal X11 (xinit)         │
+│   └─ xserver-xorg-core (no desktop manager) │
+│   └─ xserver-xorg-video-fbturbo (fb accel)  │
+├─────────────────────────────────────────────┤
+│ Touch Input: X11 evdev driver               │
+│   └─ xserver-xorg-input-evdev              │
+│   └─ Touch calibration: 99-calibration.conf │
+├─────────────────────────────────────────────┤
+│ Dashboard: Python3 + pygame (SDL on X11)    │
+│   └─ Multi-view with tab navigation        │
+│   └─ 10s data refresh (background thread)   │
+│   └─ Reads /tmp/kalipi/security-status.json │
+└─────────────────────────────────────────────┘
+```
+
+### Install the dashboard
 
 ```bash
-# Copy scripts and service to system paths
-sudo cp scripts/monitor-lcd.sh /opt/kalipi/scripts/
-sudo cp scripts/security-check.sh /opt/kalipi/scripts/
-sudo chmod +x /opt/kalipi/scripts/*.sh
+# After install-lcd.sh has been run and system rebooted
+sudo ./scripts/install-dashboard.sh
 
-# Install the systemd service
-sudo cp config/kalipi-monitor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable kalipi-monitor
-sudo systemctl start kalipi-monitor
+# Start the dashboard
+sudo systemctl start kalipi-dashboard
+
+# View logs
+journalctl -u kalipi-dashboard -f
 ```
 
-### What the LCD shows
+### Dashboard Views
+
+The dashboard has 5 touch-navigable views via a tab bar at the bottom:
+
+| Tab | View | What it shows |
+|-----|------|---------------|
+| **SEC** | Security | System stats (CPU, RAM, disk, temp), network IPs, service health, security summary |
+| **ALRT** | Alerts | Suricata IDS alerts feed, fail2ban banned IPs, failed SSH attempts |
+| **NET** | Network | WiFi/Tailscale status, service ports, discovered local devices |
+| **TRAD** | Trading | Logic engine status, clawbot connection, price feeds (populated by trading apps) |
+| **APPS** | Apps | Touch-friendly launcher grid for quick actions and installed apps |
+
+### Dashboard Layout (480x320)
 
 ```
- ╔═══════════════════════════════════╗
- ║         K A L I P i               ║
- ║     Security Monitor  14:32:07   ║
- ╠═══════════════════════════════════╣
- ║ SYSTEM                           ║
- ║  CPU: 12%  Temp: 52°C            ║
- ║  RAM: 487/3904MB (12%)           ║
- ║  DSK: 8.2G/118G (7%)            ║
- ║  Up:  2 days, 14 hours           ║
- ╠═══════════════════════════════════╣
- ║ NETWORK                          ║
- ║  WiFi: 192.168.0.105             ║
- ║  T.S.: 100.64.0.12 (Running)    ║
- ╠═══════════════════════════════════╣
- ║ SERVICES                         ║
- ║  ssh:active ts:active f2b:active ║
- ╠═══════════════════════════════════╣
- ║ SECURITY                         ║
- ║  Alerts: 0  Banned: 2            ║
- ║  Failed SSH: 7 (6hr)             ║
- ║  Last check: 2026-02-19_14:00    ║
- ╚═══════════════════════════════════╝
+┌──────────────────────────────────────┐
+│ KALIPi  Security          52C 14:32 │ ← 28px header
+├──────────────────────────────────────┤
+│                                      │
+│         Active View Content          │ ← 248px content area
+│         (touch-scrollable)           │
+│                                      │
+├──────────────────────────────────────┤
+│ SEC │ ALRT │ NET │ TRAD │ APPS      │ ← 44px tab bar (touch targets)
+└──────────────────────────────────────┘
 ```
 
-Refreshes every 10 seconds. Reads security data from the last `security-check.sh` run and live system stats.
+### Text-only Fallback
+
+The original text-based `monitor-lcd.sh` is kept as a fallback for framebuffer-only mode (no X11):
+
+```bash
+# One-shot render
+sudo ./scripts/monitor-lcd.sh
+
+# Continuous mode
+sudo ./scripts/monitor-lcd.sh --loop
+```
+
+---
+
+## Strip Desktop Bloat
+
+Remove desktop environment and GUI apps while **preserving** the minimal X11 components needed for the touchscreen:
+
+```bash
+sudo ./scripts/strip-bloat.sh
+```
+
+### What gets removed (~1-2GB)
+
+- XFCE desktop environment + LightDM display manager
+- Firefox, Chromium browsers
+- LibreOffice office suite
+- Icon themes (GNOME, Adwaita, Papirus)
+- GUI apps (Thunar, Mousepad, Atril, etc.)
+
+### What stays (required for touchscreen)
+
+| Package | Purpose |
+|---------|---------|
+| `xserver-xorg-core` | Minimal X server (~15MB) |
+| `xserver-xorg-input-evdev` | Touch input driver (installed by LCD35-show) |
+| `xserver-xorg-video-fbturbo` | Framebuffer acceleration for SPI LCD |
+| `xinit` | Start X session without a display manager |
+| `x11-xserver-utils` | xrandr, xset (used by rotate.sh, dashboard) |
+
+> **Note:** The old `strip-desktop.sh` removed X11 entirely. Use `strip-bloat.sh` instead — it preserves touch support.
+
+---
+
+## Trading & App Integration
+
+### Trading Dashboard
+
+The Trading view reads from `/tmp/kalipi/trading-status.json`. Trading apps (price scrapers, logic engine, clawbot connector) write their status to this file:
+
+```json
+{
+    "engine_status": "running",
+    "clawbot_connected": true,
+    "clawbot_latency_ms": 42,
+    "feeds": [
+        {"symbol": "BTC", "price": 98500.00, "change_pct": 2.15},
+        {"symbol": "ETH", "price": 3200.50, "change_pct": -0.8}
+    ],
+    "positions": [],
+    "last_signal": "BUY BTC @ 98000 (momentum breakout)"
+}
+```
+
+### Custom App Launcher
+
+Add apps to the launcher by placing JSON descriptors in `/opt/kalipi/apps.d/`:
+
+```bash
+# Example: Register a price scraper app
+cat > /opt/kalipi/apps.d/price-scraper.json << 'EOF'
+{
+    "name": "Price Scraper",
+    "desc": "Start BTC/ETH price feed",
+    "cmd": "/opt/kalipi/trading/scraper.py --daemon",
+    "icon": "PRC",
+    "color": [100, 180, 255]
+}
+EOF
+```
+
+The Apps view auto-discovers these files and displays them as touch-friendly buttons in a grid.
+
+### Built-in Quick Actions
+
+The Apps view always includes:
+- **Security Check** — runs a full security audit
+- **Network Scan** — scans local network for devices
+- **Reboot** — restarts the Pi (with confirmation dialog)
 
 ---
 
@@ -739,11 +852,23 @@ sudo ./scripts/security-check.sh --devices     # + network device scan
 sudo ./scripts/security-check.sh --cron        # No color (for cron)
 ```
 
-### `scripts/monitor-lcd.sh` — LCD dashboard
+### `scripts/monitor-lcd.sh` — LCD text dashboard (fallback)
 
 ```bash
 sudo ./scripts/monitor-lcd.sh          # One-shot render
 sudo ./scripts/monitor-lcd.sh --loop   # Continuous (for systemd)
+```
+
+### `scripts/install-dashboard.sh` — Touchscreen dashboard
+
+```bash
+sudo ./scripts/install-dashboard.sh    # Install pygame dashboard + dependencies
+```
+
+### `scripts/strip-bloat.sh` — Remove desktop bloat (keep X11 core)
+
+```bash
+sudo ./scripts/strip-bloat.sh          # Replaces strip-desktop.sh
 ```
 
 ### Full provisioning order
@@ -768,12 +893,17 @@ sudo ./scripts/setup.sh tskey-auth-XXXX
 # 3. Security stack
 sudo ./scripts/install-security.sh
 
-# 4. LCD driver (will reboot)
+# 4. Strip desktop bloat (BEFORE LCD driver — keeps X11 core)
+sudo ./scripts/strip-bloat.sh
+
+# 5. LCD driver (will reboot)
 sudo ./scripts/install-lcd.sh 90
 
-# 5. After reboot — start LCD dashboard
-sudo systemctl enable kalipi-monitor
-sudo systemctl start kalipi-monitor
+# 6. After reboot — install touchscreen dashboard
+sudo ./scripts/install-dashboard.sh
+
+# 7. Start the dashboard
+sudo systemctl start kalipi-dashboard
 ```
 
 ---
@@ -846,6 +976,45 @@ cd /home/kali/LCD-show-kali
 sudo ./LCD35-show
 ```
 
+### Dashboard not starting
+
+```bash
+# Check service status
+sudo systemctl status kalipi-dashboard
+journalctl -u kalipi-dashboard --no-pager -n 50
+
+# Check if X11 core packages are installed
+dpkg -l xserver-xorg-core xserver-xorg-input-evdev xinit python3-pygame
+
+# Reinstall if missing
+sudo apt install -y xserver-xorg-core xserver-xorg-input-evdev xinit python3-pygame
+
+# Test manually
+cd /opt/kalipi && sudo xinit ./.xinitrc -- :0 -nocursor vt1
+
+# Test in windowed mode over SSH (X forwarding)
+ssh -X kali@kalipi
+cd /opt/kalipi && python3 -m dashboard.main --windowed
+```
+
+### Touch not responding
+
+```bash
+# Check if evdev input exists
+cat /proc/bus/input/devices | grep -A4 -i touch
+
+# Verify X11 evdev config
+ls /etc/X11/xorg.conf.d/
+# Should have: 99-calibration.conf and 45-evdev.conf
+
+# Check if libinput is conflicting (LCD35-show removes it)
+ls /etc/X11/xorg.conf.d/40-libinput.conf
+# This file should NOT exist
+
+# Re-run LCD installer to fix touch config
+cd /home/kali/LCD-show-kali && sudo ./LCD35-show
+```
+
 ### SD card not using full 128GB
 
 ```bash
@@ -902,4 +1071,8 @@ sudo resize2fs /dev/mmcblk0p2
 | SSH | Port 22 (default) |
 | Tailscale SSH | Enabled via `--ssh` flag |
 | LCD | 3.5" SPI, 480x320, rotate=90 |
+| Dashboard | pygame on X11 (kalipi-dashboard.service) |
+| Dashboard views | SEC, ALRT, NET, TRAD, APPS |
+| Trading status | `/tmp/kalipi/trading-status.json` |
+| App descriptors | `/opt/kalipi/apps.d/*.json` |
 | Hostname | `kalipi` |

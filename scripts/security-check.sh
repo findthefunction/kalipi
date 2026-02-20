@@ -266,8 +266,44 @@ else
     warn "${ALERT_COUNT} alert(s) raised. Review above."
 fi
 
-# Write summary to a status file the LCD monitor can read
+# Write expanded status file for the dashboard to consume
 mkdir -p /tmp/kalipi
+
+# Collect fail2ban banned IPs as JSON array
+F2B_BANNED_IPS="[]"
+if command -v fail2ban-client &>/dev/null; then
+    F2B_BANNED_IPS=$(fail2ban-client status sshd 2>/dev/null | \
+        grep "Banned IP list:" | sed 's/.*Banned IP list://' | \
+        awk '{gsub(/^ +| +$/,""); n=split($0,a," "); printf "["; for(i=1;i<=n;i++){printf "\"%s\"",a[i]; if(i<n) printf ","} printf "]"}' \
+        2>/dev/null || echo "[]")
+    [ -z "$F2B_BANNED_IPS" ] && F2B_BANNED_IPS="[]"
+fi
+
+F2B_BANNED_COUNT=$(fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $NF}' 2>/dev/null || echo "0")
+[ -z "$F2B_BANNED_COUNT" ] && F2B_BANNED_COUNT=0
+
+# Collect recent Suricata alerts as JSON array (last 6 hours, max 20)
+SURICATA_ALERTS="[]"
+if [ -f /var/log/suricata/eve.json ]; then
+    CUTOFF_TS=$(date -d '6 hours ago' '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')
+    SURICATA_ALERTS=$(jq -c "[
+        .[] |
+        select(.event_type==\"alert\" and .timestamp>=\"${CUTOFF_TS}\") |
+        {timestamp: .timestamp, signature: .alert.signature, severity: .alert.severity}
+    ] | .[-20:]" /var/log/suricata/eve.json 2>/dev/null || echo "[]")
+    [ -z "$SURICATA_ALERTS" ] && SURICATA_ALERTS="[]"
+fi
+
+# Collect network devices if a recent scan exists
+NETWORK_DEVICES="[]"
+LATEST_SCAN=$(ls -t "${REPORT_DIR}"/network-scan-*.txt 2>/dev/null | head -1)
+if [ -n "$LATEST_SCAN" ]; then
+    NETWORK_DEVICES=$(grep "Nmap scan report for" "$LATEST_SCAN" 2>/dev/null | \
+        awk '{ip=$NF; gsub(/[()]/, "", ip); printf "{\"ip\":\"%s\"},", ip}' | \
+        sed 's/,$//' | awk '{printf "[%s]", $0}' 2>/dev/null || echo "[]")
+    [ -z "$NETWORK_DEVICES" ] && NETWORK_DEVICES="[]"
+fi
+
 cat > /tmp/kalipi/security-status.json << EOF
 {
     "timestamp": "${TIMESTAMP}",
@@ -276,6 +312,10 @@ cat > /tmp/kalipi/security-status.json << EOF
     "mem_pct": ${MEM_USAGE},
     "cpu_temp": ${CPU_TEMP_C},
     "failed_ssh": ${FAILED_LOGINS},
+    "f2b_banned": ${F2B_BANNED_COUNT},
+    "banned_ips": ${F2B_BANNED_IPS},
+    "recent_alerts": ${SURICATA_ALERTS},
+    "network_devices": ${NETWORK_DEVICES},
     "tailscale": "$(tailscale status --self --json 2>/dev/null | jq -r '.BackendState' 2>/dev/null || echo 'unknown')",
     "services": {
         "ssh": "$(systemctl is-active ssh 2>/dev/null || echo 'unknown')",
