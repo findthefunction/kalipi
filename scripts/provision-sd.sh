@@ -188,15 +188,40 @@ chmod 600 "$MOUNT_ROOT/etc/NetworkManager/system-connections/${WIFI_SSID}.nmconn
 
 # ─── 6. Enable SSH in rootfs systemd ─────────────────────────
 log "Enabling SSH service in rootfs..."
-# Create the symlink that systemd uses to enable a service
 mkdir -p "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants"
-ln -sf /lib/systemd/system/ssh.service \
-    "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/ssh.service" 2>/dev/null || true
+
+# Kali uses either ssh.service or sshd.service depending on version — enable both
+for SVC in ssh sshd; do
+    if [ -f "$MOUNT_ROOT/lib/systemd/system/${SVC}.service" ]; then
+        ln -sf "/lib/systemd/system/${SVC}.service" \
+            "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/${SVC}.service" 2>/dev/null || true
+        log "  Enabled ${SVC}.service"
+    fi
+done
 
 # Also ensure the sshd generates host keys on first boot
-mkdir -p "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants"
-ln -sf /lib/systemd/system/regenerate_ssh_host_keys.service \
-    "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/regenerate_ssh_host_keys.service" 2>/dev/null || true
+for KEYSVC in regenerate_ssh_host_keys ssh-keygen; do
+    if [ -f "$MOUNT_ROOT/lib/systemd/system/${KEYSVC}.service" ]; then
+        ln -sf "/lib/systemd/system/${KEYSVC}.service" \
+            "$MOUNT_ROOT/etc/systemd/system/multi-user.target.wants/${KEYSVC}.service" 2>/dev/null || true
+        log "  Enabled ${KEYSVC}.service"
+    fi
+done
+
+# Pre-generate host keys if they don't exist (some images skip this)
+if [ ! -f "$MOUNT_ROOT/etc/ssh/ssh_host_ed25519_key" ]; then
+    log "Generating SSH host keys..."
+    ssh-keygen -A -f "$MOUNT_ROOT" 2>/dev/null || true
+fi
+
+# Ensure SSH is configured to accept connections
+if [ -f "$MOUNT_ROOT/etc/ssh/sshd_config" ]; then
+    # Remove any "PermitRootLogin no" that might block initial login
+    # (default Kali user is 'kali' not root, but just in case)
+    if ! grep -q "^PermitRootLogin" "$MOUNT_ROOT/etc/ssh/sshd_config"; then
+        echo "PermitRootLogin yes" >> "$MOUNT_ROOT/etc/ssh/sshd_config"
+    fi
+fi
 
 # ─── 7. Set hostname ─────────────────────────────────────────
 log "Setting hostname to '${HOSTNAME}'..."

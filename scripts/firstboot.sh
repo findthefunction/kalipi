@@ -134,17 +134,31 @@ fi
 
 # ─── Ensure SSH is running ────────────────────────────────────
 echo "Ensuring SSH is running..."
-systemctl enable ssh 2>/dev/null || true
-systemctl start ssh 2>/dev/null || true
 
-if systemctl is-active --quiet ssh; then
+# Generate host keys if missing
+if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+    echo "Generating SSH host keys..."
+    ssh-keygen -A
+fi
+
+# Try both service names (Kali uses ssh.service or sshd.service depending on version)
+for SVC in ssh sshd; do
+    systemctl enable "$SVC" 2>/dev/null || true
+    systemctl start "$SVC" 2>/dev/null || true
+done
+
+if systemctl is-active --quiet ssh 2>/dev/null || systemctl is-active --quiet sshd 2>/dev/null; then
     echo "SSH is active."
 else
-    echo "WARNING: SSH failed to start!"
-    systemctl status ssh 2>/dev/null || true
-
-    # Last resort: start sshd directly
+    echo "WARNING: SSH service failed to start, launching sshd directly..."
     /usr/sbin/sshd 2>/dev/null || true
+fi
+
+# Verify SSH is listening
+if ss -tlnp | grep -q ":22 "; then
+    echo "SSH listening on port 22."
+else
+    echo "WARNING: Nothing listening on port 22!"
 fi
 
 # ─── Ensure wpa_supplicant persists across reboots ────────────
