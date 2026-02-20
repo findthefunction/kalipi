@@ -86,8 +86,19 @@ else
 fi
 
 # ─── System Update ────────────────────────────────────────────
-log "Updating system packages (barebones)..."
-apt update && apt upgrade -y
+log "Updating package index..."
+apt update
+
+# Only upgrade already-installed essentials, not the full desktop stack.
+# A full 'apt upgrade' on stock Kali ARM pulls ~2.5GB of desktop/xfce updates.
+log "Upgrading core packages only (skipping desktop bloat)..."
+apt install -y --only-upgrade \
+    openssh-server openssh-client \
+    systemd \
+    wpasupplicant \
+    apt apt-utils dpkg \
+    bash coreutils \
+    linux-image-arm64 firmware-linux 2>/dev/null || true
 
 log "Installing essential packages..."
 apt install -y \
