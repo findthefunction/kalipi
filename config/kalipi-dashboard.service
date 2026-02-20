@@ -1,0 +1,23 @@
+[Unit]
+Description=KaliPi Touchscreen Dashboard
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/kalipi/start-dashboard.sh
+Restart=always
+RestartSec=10
+User=root
+Environment=PYTHONPATH=/opt/kalipi
+WorkingDirectory=/opt/kalipi
+
+# Give X11 time to initialize before systemd thinks we've stalled
+TimeoutStartSec=30
+
+# Logging
+StandardOutput=append:/var/log/kalipi-dashboard.log
+StandardError=append:/var/log/kalipi-dashboard.log
+
+[Install]
+WantedBy=multi-user.target
