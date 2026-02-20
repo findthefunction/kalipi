@@ -2,6 +2,7 @@
 Description=KaliPi Touchscreen Dashboard
 After=network-online.target tailscaled.service
 Wants=network-online.target
+Conflicts=display-manager.service
 
 [Service]
 Type=simple

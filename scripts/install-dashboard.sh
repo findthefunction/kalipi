@@ -160,8 +160,16 @@ fi
 cd "${INSTALL_DIR}"
 echo "$(date): Starting dashboard on ${FRAMEBUFFER}" >> "$LOG_FILE"
 
+# Kill any display manager or stale X server holding :0
+if pidof Xorg >/dev/null 2>&1 || pidof X >/dev/null 2>&1; then
+    echo "$(date): Killing stale X server..." >> "$LOG_FILE"
+    killall Xorg 2>/dev/null || true
+    killall X 2>/dev/null || true
+    sleep 1
+fi
+
 # Start minimal X session with dashboard
-# xinit reads .xinitrc from the current directory or $HOME
+# xinit reads .xinitrc from $HOME
 export HOME="${INSTALL_DIR}"
 exec xinit "${INSTALL_DIR}/.xinitrc" -- :0 \
     -nocursor \
@@ -170,6 +178,24 @@ exec xinit "${INSTALL_DIR}/.xinitrc" -- :0 \
     2>> "$LOG_FILE"
 WRAPPER
 chmod +x "${INSTALL_DIR}/start-dashboard.sh"
+
+# ─── Disable display manager (login screen) ─────────────────
+# The dashboard runs its own X session on the SPI LCD framebuffer.
+# A display manager (LightDM/GDM/SDDM) would grab :0 and block xinit.
+DM_SERVICE=$(systemctl get-default 2>/dev/null)
+if [ "$DM_SERVICE" = "graphical.target" ]; then
+    log "Switching default target to multi-user (no GUI login)..."
+    systemctl set-default multi-user.target
+fi
+
+# Disable any active display manager
+for dm in lightdm gdm3 gdm sddm lxdm xdm; do
+    if systemctl is-enabled "${dm}.service" >/dev/null 2>&1; then
+        log "Disabling ${dm} display manager..."
+        systemctl disable "${dm}.service"
+        systemctl stop "${dm}.service" 2>/dev/null || true
+    fi
+done
 
 # ─── Install systemd service ─────────────────────────────────
 log "Installing systemd service..."
