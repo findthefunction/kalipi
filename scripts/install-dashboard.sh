@@ -39,7 +39,7 @@ apt update
 apt install -y \
     xserver-xorg-core \
     xserver-xorg-input-evdev \
-    xserver-xorg-video-fbturbo \
+    xserver-xorg-video-fbdev \
     xinit \
     x11-xserver-utils \
     x11-utils
