@@ -1,10 +1,12 @@
 #!/bin/bash
-# KaliPi — Install the remote monitoring agent (HTTP API over Tailscale)
+# KaliPi — Install the remote monitoring agent (HTTP API + SSH access)
 #
 # Deploys the agent to /opt/kalipi/agent/ and enables the systemd service.
-# The API binds to the Tailscale IP only — not accessible from LAN or internet.
+# Sets up SSH key auth for the OpenClaw bot on the Droplet.
 #
-# Usage: sudo ./scripts/install-agent.sh
+# Usage: sudo ./scripts/install-agent.sh [droplet-pubkey]
+#   droplet-pubkey: optional path to the Droplet's SSH public key file
+#                   If omitted, you can add it manually later.
 
 set -euo pipefail
 
@@ -24,6 +26,7 @@ fi
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 INSTALL_DIR="/opt/kalipi"
+DROPLET_PUBKEY="${1:-}"
 
 # ─── Verify Tailscale is running ─────────────────────────────
 if ! tailscale ip -4 >/dev/null 2>&1; then
@@ -57,6 +60,31 @@ else
     log "API token already exists, keeping current token."
 fi
 
+# ─── Set up SSH key auth for Droplet ─────────────────────────
+KALI_HOME="/home/kali"
+SSH_DIR="${KALI_HOME}/.ssh"
+AUTH_KEYS="${SSH_DIR}/authorized_keys"
+
+mkdir -p "${SSH_DIR}"
+chmod 700 "${SSH_DIR}"
+chown kali:kali "${SSH_DIR}"
+
+if [ -n "${DROPLET_PUBKEY}" ] && [ -f "${DROPLET_PUBKEY}" ]; then
+    PUBKEY=$(cat "${DROPLET_PUBKEY}")
+    if ! grep -qF "${PUBKEY}" "${AUTH_KEYS}" 2>/dev/null; then
+        echo "${PUBKEY}" >> "${AUTH_KEYS}"
+        chmod 600 "${AUTH_KEYS}"
+        chown kali:kali "${AUTH_KEYS}"
+        log "Droplet SSH public key added to ${AUTH_KEYS}"
+    else
+        log "Droplet SSH key already in authorized_keys."
+    fi
+else
+    warn "No Droplet pubkey provided. To add SSH access later, run on the Droplet:"
+    warn "  ssh-copy-id kali@${TS_IP}"
+    warn "Or paste the Droplet's public key into ${AUTH_KEYS}"
+fi
+
 # ─── Install systemd service ─────────────────────────────────
 log "Installing systemd service..."
 cp "${REPO_DIR}/config/kalipi-agent.service" /etc/systemd/system/
@@ -72,7 +100,7 @@ sleep 2
 if systemctl is-active kalipi-agent.service >/dev/null 2>&1; then
     log "Agent is running!"
 else
-    warn "Agent may still be starting (waiting for Tailscale). Check: journalctl -u kalipi-agent -f"
+    warn "Agent failed to start. Check: journalctl -u kalipi-agent -f"
 fi
 
 # ─── Summary ─────────────────────────────────────────────────
@@ -84,14 +112,25 @@ log "============================================"
 log "  API:       http://${TS_IP}:7443"
 log "  Health:    curl http://${TS_IP}:7443/api/health"
 log "  Status:    curl http://${TS_IP}:7443/api/status"
-log "  Commands:  curl -X POST http://${TS_IP}:7443/api/command \\"
+log "  Exec:      curl -X POST http://${TS_IP}:7443/api/exec \\"
 log "               -H 'Content-Type: application/json' \\"
 log "               -H 'Authorization: Bearer ${TOKEN}' \\"
-log "               -d '{\"command\":\"service-status\"}'"
+log "               -d '{\"cmd\":\"whoami\"}'"
+log "  SSH:       ssh kali@${TS_IP}"
 log "  Service:   systemctl status kalipi-agent"
 log "  Log:       journalctl -u kalipi-agent -f"
 log "============================================"
 echo ""
 log "One-liner for OpenClaw bot (paste into AGENTS.md or chat):"
 echo ""
-echo "KaliPi is a Raspberry Pi 4 security monitor on Tailscale at ${TS_IP}:7443. GET /api/status for full security+system status. GET /api/health for heartbeat. POST /api/command with {\"command\":\"NAME\"} to run commands. Auth header: 'Authorization: Bearer ${TOKEN}'. Available commands: security-scan, service-status, restart-service (needs {\"args\":{\"service\":\"NAME\"}}), network-scan, fail2ban-status, tailscale-status, disk-usage, recent-logs (needs {\"args\":{\"source\":\"security|suricata|fail2ban|dashboard|agent\"}}). Alert me if: failed_ssh > 0, f2b_banned > 0, cpu_temp > 75, mem_pct > 90, disk_pct > 85, or any service is not 'active'."
+cat << EOF
+KaliPi is a Raspberry Pi 4 running Kali Linux on your Tailscale network at ${TS_IP}. You have full access via two methods:
+
+1. HTTP API (port 7443): GET /api/status for system+security status. GET /api/health for heartbeat. POST /api/exec with {"cmd":"SHELL_COMMAND"} for arbitrary shell execution (auth: 'Authorization: Bearer ${TOKEN}'). POST /api/command with {"command":"NAME"} for structured commands: security-scan, service-status, restart-service, network-scan, fail2ban-status, tailscale-status, disk-usage, recent-logs.
+
+2. SSH: ssh kali@${TS_IP} — full shell access. Use for interactive tasks, file transfers, or long-running commands.
+
+Example curl: curl -s -X POST http://${TS_IP}:7443/api/exec -H 'Content-Type: application/json' -H 'Authorization: Bearer ${TOKEN}' -d '{"cmd":"uname -a"}'
+
+Monitor alerts: check /api/status and flag if failed_ssh > 0, f2b_banned > 0, cpu_temp > 75, mem_pct > 90, disk_pct > 85, or any service not active.
+EOF
