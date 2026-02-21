@@ -1,0 +1,17 @@
+[Unit]
+Description=KaliPi Agent — Remote monitoring API
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m agent
+WorkingDirectory=/opt/kalipi
+Environment=PYTHONPATH=/opt/kalipi
+Restart=always
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
